@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Share your location</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: #0f1115; color: #e7e9ee;
+    display: flex; align-items: center; justify-content: center; padding: 20px;
+  }
+  .card {
+    width: 100%; max-width: 440px; background: #171a21;
+    border: 1px solid #262b36; border-radius: 16px; padding: 26px;
+    box-shadow: 0 10px 40px rgba(0,0,0,.4);
+  }
+  h1 { font-size: 20px; margin: 0 0 6px; }
+  p { color: #aab1c0; line-height: 1.5; font-size: 14px; margin: 10px 0; }
+  .notice {
+    background: #1e2330; border: 1px solid #2d3444; border-radius: 10px;
+    padding: 12px 14px; font-size: 13px; color: #c6ccd8; margin: 16px 0;
+  }
+  button {
+    width: 100%; border: 0; border-radius: 10px; padding: 14px;
+    font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 8px;
+    background: #3b82f6; color: #fff;
+  }
+  button:disabled { opacity: .5; cursor: default; }
+  .muted { color: #7a8191; font-size: 12px; }
+  .result { margin-top: 18px; }
+  .row { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid #232834; }
+  .row span:first-child { color: #8b93a3; font-size: 13px; }
+  .row span:last-child { text-align: right; font-weight: 600; font-size: 13px; word-break: break-word; }
+  a { color: #60a5fa; }
+  .blocked h1 { color: #f87171; }
+  .hidden { display: none; }
+  .spin { display: inline-block; width: 16px; height: 16px; border: 2px solid #ffffff66; border-top-color:#fff; border-radius: 50%; animation: s 0.8s linear infinite; vertical-align: -3px; }
+  @keyframes s { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div class="card" id="app">
+  <!-- Loading gate -->
+  <div id="gate">
+    <h1>Checking access&hellip; <span class="spin"></span></h1>
+    <p class="muted">One moment.</p>
+  </div>
+
+  <!-- Consent screen -->
+  <div id="consent" class="hidden">
+    <h1>Share your location</h1>
+    <p>This page asks your device for your current location. When you tap the
+       button below, your browser will ask for permission.</p>
+    <div class="notice">
+      <strong>What happens to your location:</strong> if you allow it, your
+      precise coordinates and approximate address are shown on this page
+      <span id="recipientNote"></span>. You can decline &mdash; nothing is
+      collected unless you tap Allow in the browser prompt.
+    </div>
+    <button id="shareBtn">Share my location</button>
+    <p class="muted" style="text-align:center">You can deny permission at any time.</p>
+  </div>
+
+  <!-- Blocked screen -->
+  <div id="blocked" class="hidden blocked">
+    <h1>Not available</h1>
+    <p id="blockedMsg">This page isn&rsquo;t available from your current connection.</p>
+  </div>
+
+  <!-- Result -->
+  <div id="result" class="result hidden">
+    <h1>Location shared &check;</h1>
+    <div class="row"><span>Latitude</span><span id="lat">&mdash;</span></div>
+    <div class="row"><span>Longitude</span><span id="lng">&mdash;</span></div>
+    <div class="row"><span>Accuracy</span><span id="acc">&mdash;</span></div>
+    <div class="row"><span>Address</span><span id="addr">&mdash;</span></div>
+    <div class="row"><span>Map</span><span><a id="maplink" target="_blank" rel="noopener">Open in Maps</a></span></div>
+  </div>
+</div>
+
+<script>
+/* ========================= CONFIG ========================= */
+const CONFIG = {
+  // Bangalore city centre; radius in km defines "inside Bangalore".
+  bangalore: { lat: 12.9716, lng: 77.5946, radiusKm: 45 },
+
+  // VPN/proxy detection. Sign up free at https://vpnapi.io for an API key
+  // and paste it here. Leave "" to skip VPN detection (gate on location only).
+  vpnapiKey: "",
+
+  // Optional: recipient name shown in the consent notice.
+  recipientName: "",
+
+  // Optional: a webhook URL to ALSO send the location to (e.g. your own
+  // endpoint, a Formspree / Make / Zapier hook). Leave "" to only show it on
+  // screen. The consent notice tells the visitor their location is shared.
+  webhookUrl: "",
+
+  /* ---- Access rule ----
+     Return true to BLOCK the page. Edit this to change the policy.
+     Current rule (per request): block only when the visitor is BOTH on a
+     VPN AND outside Bangalore. Other common rules are shown commented out. */
+  shouldBlock: function (ctx) {
+    return ctx.isVPN && !ctx.insideBangalore;
+    // Only allow inside Bangalore, block VPN entirely:
+    //   return ctx.isVPN || !ctx.insideBangalore;
+    // Allow everywhere EXCEPT Bangalore:
+    //   return ctx.insideBangalore;
+  }
+};
+/* ========================================================== */
+
+var $ = function (id) { return document.getElementById(id); };
+function show(id) {
+  ["gate", "consent", "blocked", "result"].forEach(function (s) { $(s).classList.add("hidden"); });
+  $(id).classList.remove("hidden");
+}
+
+function haversineKm(a, b) {
+  var R = 6371, toRad = function (d) { return d * Math.PI / 180; };
+  var dLat = toRad(b.lat - a.lat), dLng = toRad(b.lng - a.lng);
+  var x = Math.pow(Math.sin(dLat / 2), 2) +
+          Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.pow(Math.sin(dLng / 2), 2);
+  return 2 * R * Math.asin(Math.sqrt(x));
+}
+
+// IP intelligence: VPN flag + coarse city (used before GPS is available).
+async function ipCheck() {
+  var isVPN = false, ipCity = null, ipCountry = null;
+  try {
+    if (CONFIG.vpnapiKey) {
+      var r = await fetch("https://vpnapi.io/api/?key=" + encodeURIComponent(CONFIG.vpnapiKey));
+      if (r.ok) {
+        var d = await r.json();
+        var s = d.security || {};
+        isVPN = !!(s.vpn || s.proxy || s.tor);
+        ipCity = (d.location && d.location.city) || null;
+        ipCountry = (d.location && d.location.country_code) || null;
+      }
+    } else {
+      var r2 = await fetch("https://ipwho.is/");
+      if (r2.ok) { var d2 = await r2.json(); ipCity = d2.city || null; ipCountry = d2.country_code || null; }
+    }
+  } catch (e) { /* network/API failure: treat as unknown */ }
+  return { isVPN: isVPN, ipCity: ipCity, ipCountry: ipCountry };
+}
+
+async function reverseGeocode(lat, lng) {
+  try {
+    var r = await fetch("https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=" +
+                        lat + "&longitude=" + lng + "&localityLanguage=en");
+    if (!r.ok) return null;
+    var d = await r.json();
+    return [d.locality, d.city, d.principalSubdivision, d.countryName]
+      .filter(Boolean).join(", ") || null;
+  } catch (e) { return null; }
+}
+
+async function postWebhook(payload) {
+  if (!CONFIG.webhookUrl) return;
+  try {
+    await fetch(CONFIG.webhookUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    });
+  } catch (e) { /* ignore */ }
+}
+
+var ipState = { isVPN: false, ipCity: null, ipCountry: null };
+
+async function init() {
+  $("recipientNote").textContent = CONFIG.recipientName
+    ? "with " + CONFIG.recipientName
+    : "with the person who sent you this link";
+
+  ipState = await ipCheck();
+
+  var ipInsideBlr = ipState.ipCity ? /beng|bangalore/i.test(ipState.ipCity) : false;
+
+  // Only hard-block here when we are confident (VPN known via IP).
+  // Otherwise let the precise GPS check decide after consent.
+  if (ipState.isVPN && CONFIG.shouldBlock({ isVPN: true, insideBangalore: ipInsideBlr })) {
+    show("blocked");
+    return;
+  }
+  show("consent");
+}
+
+$("shareBtn").addEventListener("click", function () {
+  if (!navigator.geolocation) {
+    $("blockedMsg").textContent = "Your browser does not support location.";
+    show("blocked");
+    return;
+  }
+  $("shareBtn").disabled = true;
+  $("shareBtn").innerHTML = 'Requesting&hellip; <span class="spin"></span>';
+
+  navigator.geolocation.getCurrentPosition(async function (pos) {
+    var lat = pos.coords.latitude, lng = pos.coords.longitude, accuracy = pos.coords.accuracy;
+    var insideBangalore = haversineKm({ lat: lat, lng: lng }, CONFIG.bangalore) <= CONFIG.bangalore.radiusKm;
+
+    // Final gate using precise GPS (a VPN cannot fake GPS coordinates).
+    if (CONFIG.shouldBlock({ isVPN: ipState.isVPN, insideBangalore: insideBangalore })) {
+      show("blocked");
+      return;
+    }
+
+    var address = await reverseGeocode(lat, lng);
+    var mapUrl = "https://www.google.com/maps?q=" + lat + "," + lng;
+    $("lat").textContent = lat.toFixed(6);
+    $("lng").textContent = lng.toFixed(6);
+    $("acc").textContent = "±" + Math.round(accuracy) + " m";
+    $("addr").textContent = address || "Unavailable";
+    $("maplink").href = mapUrl;
+    show("result");
+
+    postWebhook({
+      lat: lat, lng: lng, accuracy: accuracy, address: address,
+      insideBangalore: insideBangalore, isVPN: ipState.isVPN,
+      ipCity: ipState.ipCity, ipCountry: ipState.ipCountry,
+      mapUrl: mapUrl, at: new Date().toISOString(), userAgent: navigator.userAgent
+    });
+  }, function (err) {
+    $("shareBtn").disabled = false;
+    $("shareBtn").textContent = "Share my location";
+    alert(err.code === 1 ? "Location permission was denied." : "Could not get location. Please try again.");
+  }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+});
+
+init();
+</script>
+</body>
+</html>
