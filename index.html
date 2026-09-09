@@ -44,22 +44,16 @@
 </head>
 <body>
 <div class="card" id="app">
-  <!-- Loading gate -->
-  <div id="gate">
-    <h1>Checking access&hellip; <span class="spin"></span></h1>
-    <p class="muted">One moment.</p>
-  </div>
-
   <!-- Consent screen -->
-  <div id="consent" class="hidden">
+  <div id="consent">
     <h1>Share your location</h1>
     <p>This page asks your device for your current location. When you tap the
        button below, your browser will ask for permission.</p>
     <div class="notice">
       <strong>What happens to your location:</strong> if you allow it, your
-      precise coordinates and approximate address are shown on this page
-      <span id="recipientNote"></span>. You can decline &mdash; nothing is
-      collected unless you tap Allow in the browser prompt.
+      coordinates and approximate address are shown here and sent to
+      <span id="recipientNote"></span>. You can decline &mdash; nothing is sent
+      unless you tap Allow in the browser prompt.
     </div>
     <button id="shareBtn">Share my location</button>
     <p class="muted" style="text-align:center">You can deny permission at any time.</p>
@@ -85,69 +79,24 @@
 <script>
 /* ========================= CONFIG ========================= */
 const CONFIG = {
-  // Bangalore city centre; radius in km defines "inside Bangalore".
-  bangalore: { lat: 12.9716, lng: 77.5946, radiusKm: 45 },
+  // Your deployed Supabase Edge Function URL. After `supabase functions deploy
+  // collect` it looks like:  https://<project-ref>.supabase.co/functions/v1/collect
+  endpoint: "https://YOUR-PROJECT-REF.supabase.co/functions/v1/collect",
 
-  // VPN/proxy detection. Sign up free at https://vpnapi.io for an API key
-  // and paste it here. Leave "" to skip VPN detection (gate on location only).
-  vpnapiKey: "d25d108595c940c6a7bfaae4d2af8e68",
-
-  // Optional: recipient name shown in the consent notice.
-  recipientName: "",
-
-  // Optional: a webhook URL to ALSO send the location to (e.g. your own
-  // endpoint, a Formspree / Make / Zapier hook). Leave "" to only show it on
-  // screen. The consent notice tells the visitor their location is shared.
-  webhookUrl: "",
-
-  /* ---- Access rule ----
-     Return true to BLOCK the page. Edit this to change the policy.
-     Current rule (per request): block only when the visitor is BOTH on a
-     VPN AND outside Bangalore. Other common rules are shown commented out. */
-  shouldBlock: function (ctx) {
-    return ctx.isVPN && !ctx.insideBangalore;
-    // Only allow inside Bangalore, block VPN entirely:
-    //   return ctx.isVPN || !ctx.insideBangalore;
-    // Allow everywhere EXCEPT Bangalore:
-    //   return ctx.insideBangalore;
-  }
+  // Name shown in the consent notice ("...sent to X").
+  recipientName: ""
 };
-/* ========================================================== */
+/* ==========================================================
+   VPN detection and the Bangalore geofence now run server-side
+   inside the Edge Function, so no API keys live in this page. */
 
 var $ = function (id) { return document.getElementById(id); };
 function show(id) {
-  ["gate", "consent", "blocked", "result"].forEach(function (s) { $(s).classList.add("hidden"); });
+  ["consent", "blocked", "result"].forEach(function (s) { $(s).classList.add("hidden"); });
   $(id).classList.remove("hidden");
 }
 
-function haversineKm(a, b) {
-  var R = 6371, toRad = function (d) { return d * Math.PI / 180; };
-  var dLat = toRad(b.lat - a.lat), dLng = toRad(b.lng - a.lng);
-  var x = Math.pow(Math.sin(dLat / 2), 2) +
-          Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.pow(Math.sin(dLng / 2), 2);
-  return 2 * R * Math.asin(Math.sqrt(x));
-}
-
-// IP intelligence: VPN flag + coarse city (used before GPS is available).
-async function ipCheck() {
-  var isVPN = false, ipCity = null, ipCountry = null;
-  try {
-    if (CONFIG.vpnapiKey) {
-      var r = await fetch("https://vpnapi.io/api/?key=" + encodeURIComponent(CONFIG.vpnapiKey));
-      if (r.ok) {
-        var d = await r.json();
-        var s = d.security || {};
-        isVPN = !!(s.vpn || s.proxy || s.tor);
-        ipCity = (d.location && d.location.city) || null;
-        ipCountry = (d.location && d.location.country_code) || null;
-      }
-    } else {
-      var r2 = await fetch("https://ipwho.is/");
-      if (r2.ok) { var d2 = await r2.json(); ipCity = d2.city || null; ipCountry = d2.country_code || null; }
-    }
-  } catch (e) { /* network/API failure: treat as unknown */ }
-  return { isVPN: isVPN, ipCity: ipCity, ipCountry: ipCountry };
-}
+$("recipientNote").textContent = CONFIG.recipientName || "the person who sent you this link";
 
 async function reverseGeocode(lat, lng) {
   try {
@@ -155,40 +104,8 @@ async function reverseGeocode(lat, lng) {
                         lat + "&longitude=" + lng + "&localityLanguage=en");
     if (!r.ok) return null;
     var d = await r.json();
-    return [d.locality, d.city, d.principalSubdivision, d.countryName]
-      .filter(Boolean).join(", ") || null;
+    return [d.locality, d.city, d.principalSubdivision, d.countryName].filter(Boolean).join(", ") || null;
   } catch (e) { return null; }
-}
-
-async function postWebhook(payload) {
-  if (!CONFIG.webhookUrl) return;
-  try {
-    await fetch(CONFIG.webhookUrl, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
-  } catch (e) { /* ignore */ }
-}
-
-var ipState = { isVPN: false, ipCity: null, ipCountry: null };
-
-async function init() {
-  $("recipientNote").textContent = CONFIG.recipientName
-    ? "with " + CONFIG.recipientName
-    : "with the person who sent you this link";
-
-  ipState = await ipCheck();
-
-  var ipInsideBlr = ipState.ipCity ? /beng|bangalore/i.test(ipState.ipCity) : false;
-
-  // Only hard-block here when we are confident (VPN known via IP).
-  // Otherwise let the precise GPS check decide after consent.
-  if (ipState.isVPN && CONFIG.shouldBlock({ isVPN: true, insideBangalore: ipInsideBlr })) {
-    show("blocked");
-    return;
-  }
-  show("consent");
 }
 
 $("shareBtn").addEventListener("click", function () {
@@ -202,37 +119,38 @@ $("shareBtn").addEventListener("click", function () {
 
   navigator.geolocation.getCurrentPosition(async function (pos) {
     var lat = pos.coords.latitude, lng = pos.coords.longitude, accuracy = pos.coords.accuracy;
-    var insideBangalore = haversineKm({ lat: lat, lng: lng }, CONFIG.bangalore) <= CONFIG.bangalore.radiusKm;
-
-    // Final gate using precise GPS (a VPN cannot fake GPS coordinates).
-    if (CONFIG.shouldBlock({ isVPN: ipState.isVPN, insideBangalore: insideBangalore })) {
-      show("blocked");
-      return;
-    }
-
     var address = await reverseGeocode(lat, lng);
     var mapUrl = "https://www.google.com/maps?q=" + lat + "," + lng;
+
+    // Server decides access (VPN + Bangalore) and stores the reading if allowed.
+    var allowed = true;
+    try {
+      var resp = await fetch(CONFIG.endpoint, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          lat: lat, lng: lng, accuracy: accuracy, address: address,
+          mapUrl: mapUrl, userAgent: navigator.userAgent
+        })
+      });
+      var data = await resp.json();
+      allowed = data.allowed !== false;
+    } catch (e) { /* if the endpoint is unreachable, still show the user their own location */ }
+
+    if (!allowed) { show("blocked"); return; }
+
     $("lat").textContent = lat.toFixed(6);
     $("lng").textContent = lng.toFixed(6);
     $("acc").textContent = "±" + Math.round(accuracy) + " m";
     $("addr").textContent = address || "Unavailable";
     $("maplink").href = mapUrl;
     show("result");
-
-    postWebhook({
-      lat: lat, lng: lng, accuracy: accuracy, address: address,
-      insideBangalore: insideBangalore, isVPN: ipState.isVPN,
-      ipCity: ipState.ipCity, ipCountry: ipState.ipCountry,
-      mapUrl: mapUrl, at: new Date().toISOString(), userAgent: navigator.userAgent
-    });
   }, function (err) {
     $("shareBtn").disabled = false;
     $("shareBtn").textContent = "Share my location";
     alert(err.code === 1 ? "Location permission was denied." : "Could not get location. Please try again.");
   }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
 });
-
-init();
 </script>
 </body>
 </html>

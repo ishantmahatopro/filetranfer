@@ -1,77 +1,98 @@
-# Location sharing page
+# Location sharing + private dashboard
 
-A single-file, consent-based web page that asks a visitor to share their
-location. It shows the precise coordinates, accuracy, and approximate address,
-and can optionally forward them to a webhook you control. Access is gated so the
-page won't run under certain VPN / location conditions.
+A consent-based web page that asks a visitor to share their location, and a
+**private, login-gated dashboard** that plots every reading on a live map —
+only you can see it. The VPN check and the Bangalore geofence run on the
+server, so no API keys ever live in the browser.
 
-This is a **transparent** tool: the page tells the visitor what it does, and the
-browser shows its own location-permission prompt. It is meant for people who
-knowingly share their location (meetups, field check-ins, "where are you"
-links), not for tracking anyone without their knowledge.
-
-## Use it
-
-Just open `index.html`, or host it (GitHub Pages works):
-
-1. Push this branch.
-2. Repo → Settings → Pages → deploy from this branch, root.
-3. Share the resulting `https://…` URL. **HTTPS is required** — the browser
-   Geolocation API will not work over plain HTTP.
-
-## Configure
-
-Edit the `CONFIG` block at the top of the `<script>` in `index.html`:
-
-| Key | What it does |
-|-----|--------------|
-| `bangalore` | Centre `{lat,lng}` and `radiusKm` that define "inside Bangalore". |
-| `vpnapiKey` | Free key from <https://vpnapi.io> to enable VPN/proxy/Tor detection. Leave `""` to skip it. |
-| `recipientName` | Name shown in the consent notice ("…shared with X"). |
-| `webhookUrl` | Optional endpoint (your own, or Formspree/Make/Zapier) the location is POSTed to as JSON. Leave `""` to only show it on screen. |
-| `shouldBlock(ctx)` | The access rule. Return `true` to block. |
-
-### Access rule
-
-`shouldBlock({ isVPN, insideBangalore })` decides who is turned away. The
-default, matching the request, blocks only when the visitor is **both** on a
-VPN **and** outside Bangalore:
-
-```js
-return ctx.isVPN && !ctx.insideBangalore;
+```
+visitor → index.html ──POST──▶ Supabase Edge Function (collect)
+                                  │  ├─ vpnapi.io lookup  (secret key)
+                                  │  ├─ Bangalore geofence (from GPS)
+                                  │  └─ stores reading if allowed
+                                  ▼
+                            locations table  ──realtime──▶ dashboard.html (you, logged in)
 ```
 
-Two other common rules are included as comments — allow only inside Bangalore
-and block VPN entirely, or allow everywhere except Bangalore. Change the one
-line to switch.
+This is a **transparent** tool. The public page tells the visitor their
+location is shared with you, and the browser shows its own location prompt.
+Send it to people who expect to share their location with you — not to track
+anyone who hasn't agreed.
 
-The Bangalore check uses the **GPS coordinates** from the browser, not the IP
-address, so a VPN cannot fake it. VPN detection itself uses the IP, before the
-location prompt.
+## Files
 
-## How the pieces work
+| File | What it is |
+|------|-----------|
+| `index.html` | Public page the visitor opens. No secrets in it. |
+| `dashboard.html` | Your private map dashboard. Requires login. |
+| `supabase/migrations/0001_init.sql` | `locations` table + row-level security + realtime. |
+| `supabase/functions/collect/index.ts` | Serverless endpoint: VPN + geofence check, stores readings. |
 
-- **Location** — browser Geolocation API (`getCurrentPosition`), always behind
-  the OS/browser permission prompt.
-- **Address** — BigDataCloud free client reverse-geocode endpoint (no key).
-- **VPN flag** — vpnapi.io (needs the free key).
-- **Coarse IP city/country** — ipwho.is when no vpnapi key is set.
+## One-time setup
+
+### 1. Create a Supabase project
+At <https://supabase.com> create a free project. Grab these from
+**Project Settings → API**: the **Project URL**, the **anon/publishable key**,
+and the **project ref** (the `xxxx` in `xxxx.supabase.co`).
+
+### 2. Apply the schema
+In the Supabase dashboard → **SQL Editor**, paste and run the contents of
+`supabase/migrations/0001_init.sql`. (Or with the CLI: `supabase db push`.)
+
+### 3. Deploy the Edge Function and its secrets
+With the [Supabase CLI](https://supabase.com/docs/guides/cli):
+```bash
+supabase link --project-ref YOUR-PROJECT-REF
+supabase secrets set VPNAPI_KEY=your_vpnapi_key
+supabase secrets set ALLOWED_ORIGIN=https://YOUR-USERNAME.github.io   # your site origin
+supabase functions deploy collect --no-verify-jwt
+```
+`--no-verify-jwt` lets the public page call it without a login. The function
+URL is `https://YOUR-PROJECT-REF.supabase.co/functions/v1/collect`.
+
+### 4. Create YOUR dashboard account, then lock sign-ups
+In **Authentication → Users**, add your own user (email + password). Then in
+**Authentication → Providers / Sign In**, **disable new sign-ups** so nobody
+else can register and read the data.
+
+### 5. Fill in the two front-end configs
+- `index.html` → `CONFIG.endpoint` = your `collect` function URL (and optional
+  `recipientName`).
+- `dashboard.html` → `SUPABASE_URL` and `SUPABASE_ANON_KEY`.
+
+### 6. Host the pages
+GitHub Pages works (Settings → Pages → deploy from this branch, root).
+**HTTPS is required** — the browser location API won't run over plain HTTP.
+- Public link to share: `https://YOUR-USERNAME.github.io/cyber/`
+- Your dashboard: `https://YOUR-USERNAME.github.io/cyber/dashboard.html`
+
+## Where do the locations go / how do I see them?
+Every allowed reading is a row in the `locations` table. Open
+`dashboard.html`, sign in with your account, and they appear as map markers and
+a live list — new ones stream in automatically via Supabase Realtime. Because
+of row-level security, an anonymous visitor (or anyone without your login) gets
+**nothing** from that table.
+
+## Access rule
+In `supabase/functions/collect/index.ts`, `shouldBlock()` decides who is turned
+away. Default (per request): block only when the visitor is **both on a VPN and
+outside Bangalore**. A commented alternative blocks all VPNs / allows only
+inside Bangalore. Change it and redeploy the function. The Bangalore check uses
+the GPS coordinates, so a VPN can't fake it.
 
 ## Honest limitations
+- **VPN detection is never 100%** — IP reputation misses some VPNs and can
+  false-positive.
+- **GPS accuracy varies** — metres on a phone, sometimes hundreds of metres on
+  a laptop. The reading's accuracy is stored and shown.
+- **A visitor can decline** the browser prompt; then nothing is sent. By design.
 
-- **VPN detection is never 100%.** IP-reputation services miss new or
-  residential-proxy VPNs and occasionally false-positive. Treat it as a filter,
-  not a guarantee.
-- **GPS accuracy varies.** On a phone it's usually a few metres; on a laptop on
-  Wi-Fi it can be hundreds of metres. The page shows the accuracy radius.
-- **A visitor can decline.** If they deny the browser prompt, no location is
-  collected — by design.
-- The third-party lookups run from the visitor's browser; if you set a
-  `webhookUrl` or vpnapi key, those services see the request.
+## Security note
+Your vpnapi key was briefly committed in an earlier version of this page's
+client code. Since it was exposed in the repo, **rotate it** in your vpnapi.io
+dashboard and set the new one only as the `VPNAPI_KEY` secret (step 3) — never
+back in the HTML.
 
 ## Please use it responsibly
-
-Only send this to people who expect to share their location with you, and keep
-the consent notice honest. Don't disguise it as something else or use it to
-track a person who hasn't agreed to it — that's what the visible notice and the
-browser prompt are there to prevent.
+Keep the consent notice honest, and only send the link to people who expect to
+share their location with you.

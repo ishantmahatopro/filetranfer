@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Location dashboard</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         background: #0f1115; color: #e7e9ee; }
+  header { display: flex; align-items: center; justify-content: space-between;
+           padding: 12px 18px; border-bottom: 1px solid #262b36; }
+  header h1 { font-size: 16px; margin: 0; }
+  #layout { display: flex; height: calc(100vh - 53px); }
+  #map { flex: 1; }
+  #side { width: 340px; overflow-y: auto; border-left: 1px solid #262b36; }
+  .item { padding: 12px 16px; border-bottom: 1px solid #1d222c; cursor: pointer; }
+  .item:hover { background: #151922; }
+  .item .when { font-size: 11px; color: #7a8191; }
+  .item .addr { font-size: 13px; font-weight: 600; margin: 3px 0; }
+  .item .co { font-size: 12px; color: #9aa2b2; }
+  .tag { display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 6px; margin-left: 6px; }
+  .vpn { background: #7f1d1d; color: #fecaca; }
+  .out { background: #78350f; color: #fed7aa; }
+  button { border: 0; border-radius: 8px; padding: 8px 12px; font-weight: 600; cursor: pointer;
+           background: #3b82f6; color: #fff; }
+  #login { max-width: 360px; margin: 12vh auto; padding: 26px; background: #171a21;
+           border: 1px solid #262b36; border-radius: 14px; }
+  #login h1 { font-size: 18px; margin: 0 0 14px; }
+  #login input { width: 100%; padding: 11px; margin: 6px 0; border-radius: 8px;
+                 border: 1px solid #2d3444; background: #0f1115; color: #e7e9ee; }
+  #login button { width: 100%; margin-top: 8px; }
+  .err { color: #f87171; font-size: 13px; min-height: 18px; }
+</style>
+</head>
+<body>
+
+<div id="login">
+  <h1>Dashboard login</h1>
+  <input id="email" type="email" placeholder="Email" autocomplete="username" />
+  <input id="password" type="password" placeholder="Password" autocomplete="current-password" />
+  <button id="loginBtn">Sign in</button>
+  <p class="err" id="loginErr"></p>
+</div>
+
+<div id="dash" style="display:none">
+  <header>
+    <h1>Location dashboard <span class="muted" id="count"></span></h1>
+    <button id="logoutBtn">Sign out</button>
+  </header>
+  <div id="layout">
+    <div id="map"></div>
+    <div id="side"></div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script type="module">
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+
+/* ===== CONFIG: from Supabase → Project Settings → API ===== */
+const SUPABASE_URL = "https://YOUR-PROJECT-REF.supabase.co";
+const SUPABASE_ANON_KEY = "YOUR-ANON-PUBLISHABLE-KEY";
+/* ========================================================== */
+
+const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+const $ = (id) => document.getElementById(id);
+
+let map, markers = new Map();
+
+function initMap() {
+  if (map) return;
+  map = L.map("map").setView([12.9716, 77.5946], 11);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    attribution: "© OpenStreetMap", maxZoom: 19
+  }).addTo(map);
+}
+
+function addRow(r, { prepend } = {}) {
+  if (markers.has(r.id)) return;
+  const when = new Date(r.created_at).toLocaleString();
+  const m = L.marker([r.lat, r.lng]).addTo(map)
+    .bindPopup(`<b>${r.address || "Unknown"}</b><br>${r.lat.toFixed(5)}, ${r.lng.toFixed(5)}<br>${when}` +
+               `<br><a href="${r.map_url}" target="_blank">Google Maps</a>`);
+  markers.set(r.id, m);
+
+  const el = document.createElement("div");
+  el.className = "item";
+  el.innerHTML =
+    `<div class="when">${when}</div>` +
+    `<div class="addr">${r.address || "Unknown address"}` +
+      (r.is_vpn ? `<span class="tag vpn">VPN</span>` : ``) +
+      (r.inside_bangalore === false ? `<span class="tag out">outside BLR</span>` : ``) +
+    `</div>` +
+    `<div class="co">${r.lat.toFixed(5)}, ${r.lng.toFixed(5)} · ±${Math.round(r.accuracy || 0)}m` +
+      (r.ip_city ? ` · IP: ${r.ip_city}` : ``) + `</div>`;
+  el.onclick = () => { map.setView([r.lat, r.lng], 16); m.openPopup(); };
+  const side = $("side");
+  prepend ? side.prepend(el) : side.append(el);
+  $("count").textContent = "(" + markers.size + ")";
+}
+
+async function load() {
+  initMap();
+  const { data, error } = await sb.from("locations").select("*").order("created_at", { ascending: false });
+  if (error) { alert("Could not load: " + error.message); return; }
+  data.forEach((r) => addRow(r));
+  if (data[0]) map.setView([data[0].lat, data[0].lng], 13);
+
+  sb.channel("locations-stream")
+    .on("postgres_changes", { event: "INSERT", schema: "public", table: "locations" },
+        (payload) => addRow(payload.new, { prepend: true }))
+    .subscribe();
+}
+
+async function refreshUI() {
+  const { data: { session } } = await sb.auth.getSession();
+  if (session) { $("login").style.display = "none"; $("dash").style.display = "block"; load(); }
+  else { $("login").style.display = "block"; $("dash").style.display = "none"; }
+}
+
+$("loginBtn").addEventListener("click", async () => {
+  $("loginErr").textContent = "";
+  const { error } = await sb.auth.signInWithPassword({
+    email: $("email").value.trim(), password: $("password").value
+  });
+  if (error) $("loginErr").textContent = error.message; else refreshUI();
+});
+$("logoutBtn").addEventListener("click", async () => { await sb.auth.signOut(); location.reload(); });
+
+refreshUI();
+</script>
+</body>
+</html>

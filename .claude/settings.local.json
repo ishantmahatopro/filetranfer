@@ -3,7 +3,8 @@
     "allow": [
       "Bash(git add *)",
       "Bash(git -c user.name=Claude -c user.email=noreply@anthropic.com commit -m 'Add consent-based location-sharing page with VPN/geofence gating *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(git -c user.name=Claude -c user.email=noreply@anthropic.com commit -m 'Add Supabase backend + private dashboard; move VPN key server-side *)"
     ]
   }
 }
