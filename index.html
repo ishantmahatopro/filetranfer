@@ -79,9 +79,12 @@
 <script>
 /* ========================= CONFIG ========================= */
 const CONFIG = {
-  // Your deployed Supabase Edge Function URL. After `supabase functions deploy
-  // collect` it looks like:  https://<project-ref>.supabase.co/functions/v1/collect
-  endpoint: "https://YOUR-PROJECT-REF.supabase.co/functions/v1/collect",
+  // Your deployed Supabase Edge Function URL.
+  endpoint: "https://oqdslldwqpuzvbnemwpy.supabase.co/functions/v1/collect",
+
+  // Public anon key. Safe to expose (it is public by design); sent only as the
+  // API-gateway header so the request reaches the function.
+  anonKey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9xZHNsbGR3cXB1enZibmVtd3B5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODg5NTQ5MDYsImV4cCI6MjEwNDUzMDkwNn0.HnYNoYJsQfkKk-TTdiRkpNc2avgWd6qvjahuIMpCiY4",
 
   // Name shown in the consent notice ("...sent to X").
   recipientName: ""
@@ -127,7 +130,11 @@ $("shareBtn").addEventListener("click", function () {
     try {
       var resp = await fetch(CONFIG.endpoint, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "apikey": CONFIG.anonKey,
+          "Authorization": "Bearer " + CONFIG.anonKey
+        },
         body: JSON.stringify({
           lat: lat, lng: lng, accuracy: accuracy, address: address,
           mapUrl: mapUrl, userAgent: navigator.userAgent
